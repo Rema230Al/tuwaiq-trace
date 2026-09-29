@@ -3,27 +3,27 @@ import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import IntroScreen from "./screens/IntroScreen";
 import AssessmentScreen, { type SubmitState } from "./screens/AssessmentScreen";
 import SuccessScreen from "./screens/SuccessScreen";
-import { emptyAnswers } from "./data/questions";
+import { emptyAnswers, emptyMember } from "./data/questions";
 import {
   buildSubmission,
   clearDraft,
   loadDraft,
-  loadName,
+  loadMember,
   saveDraft,
-  saveName,
+  saveMember,
   submitAssessment,
   type SubmitMode,
 } from "./services/submissionService";
-import type { AnswerKey, Answers, OtherNotes, Stage, Submission } from "./types/assessment";
+import type { AnswerKey, Answers, Member, OtherNotes, Stage, Submission } from "./types/assessment";
 
 const initialDraft = loadDraft();
 
 export default function App() {
   // 01 INIT → 02 ASSESSMENT → 03 COMPLETE
   const [stage, setStage] = useState<Stage>("init");
-  const [name, setName] = useState(loadName);
+  const [member, setMember] = useState<Member>(loadMember);
   const [step, setStep] = useState(initialDraft?.step ?? 0);
-  const [answers, setAnswers] = useState<Answers>({ ...emptyAnswers, ...initialDraft?.answers });
+  const [answers, setAnswers] = useState<Answers>(initialDraft?.answers ?? emptyAnswers);
   const [others, setOthers] = useState<OtherNotes>(initialDraft?.others ?? {});
   const [hasDraft, setHasDraft] = useState(initialDraft !== null);
   const [submitState, setSubmitState] = useState<SubmitState>("idle");
@@ -35,8 +35,8 @@ export default function App() {
   }, [stage, answers, others, step]);
 
   useEffect(() => {
-    if (stage !== "complete") saveName(name);
-  }, [stage, name]);
+    if (stage !== "complete") saveMember(member);
+  }, [stage, member]);
 
   const start = (resume: boolean) => {
     if (!resume) {
@@ -57,11 +57,11 @@ export default function App() {
 
   const submit = async () => {
     setSubmitState("sending");
-    const submission = buildSubmission(name, answers, others);
     try {
+      const submission = buildSubmission(member, answers, others);
       const mode = await submitAssessment(submission);
       clearDraft();
-      saveName("");
+      saveMember(emptyMember);
       setResult({ submission, mode });
       setSubmitState("idle");
       setStage("complete");
@@ -83,12 +83,12 @@ export default function App() {
           transition={{ duration: 0.2 }}
         >
           {stage === "init" && (
-            <IntroScreen name={name} onName={setName} resumeStep={hasDraft ? step : null} onStart={start} />
+            <IntroScreen member={member} onMember={setMember} resumeStep={hasDraft ? step : null} onStart={start} />
           )}
 
           {stage === "assessment" && (
             <AssessmentScreen
-              name={name.trim()}
+              fullName={member.fullName.trim()}
               step={step}
               answers={answers}
               others={others}

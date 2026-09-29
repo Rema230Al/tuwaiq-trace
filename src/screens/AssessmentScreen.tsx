@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { OTHER, isAnswered, questions } from "../data/questions";
+import { OTHER, canContinue, isAnswered, needsNote, questions } from "../data/questions";
+import { withNote } from "../services/submissionService";
 import type { AnswerKey, AnswerValue, Answers, OtherNotes, Question } from "../types/assessment";
 import OptionCard from "../components/OptionCard";
 import MultiSelect from "../components/MultiSelect";
@@ -11,7 +12,12 @@ import { GhostButton, Mixed, PopButton, pad, shortHash } from "../components/ui"
 
 export type SubmitState = "idle" | "sending" | "error";
 
-const TYPE_TAG: Record<Question["kind"], string> = { single: "select(1)", multi: "select(n)", text: "stdin", color: "claim()" };
+const TYPE_TAG: Record<Question["kind"], string> = {
+  single: "select(1)",
+  multi: "select(n)",
+  text: "stdin",
+  color: "claim()",
+};
 
 const slide = {
   enter: (dir: number) => ({ opacity: 0, x: dir * -36 }),
@@ -19,17 +25,29 @@ const slide = {
   exit: (dir: number) => ({ opacity: 0, x: dir * 36 }),
 };
 
-function summary(value: AnswerValue) {
+function summary(value: AnswerValue, note?: string) {
   const s = Array.isArray(value)
-    ? value.join(", ")
+    ? value.map((v) => withNote(v, note)).join(", ")
     : value && typeof value === "object"
       ? `${value.name} ${value.hex}`
-      : (value ?? "").trim();
+      : withNote(value ?? "", note).trim();
   return s.length > 34 ? `${s.slice(0, 34)}…` : s;
 }
 
 /** Desktop side panel: the answers so far as a `git log`, under a big pixel peak. */
-function SidePanel({ name, answers, done, step }: { name: string; answers: Answers; done: boolean[]; step: number }) {
+function SidePanel({
+  fullName,
+  answers,
+  others,
+  done,
+  step,
+}: {
+  fullName: string;
+  answers: Answers;
+  others: OtherNotes;
+  done: boolean[];
+  step: number;
+}) {
   return (
     <aside className="sticky top-32 hidden self-start lg:block" aria-hidden="true">
       <PixelPeak level={done.filter(Boolean).length} className="w-full max-w-[300px]" />
@@ -38,18 +56,20 @@ function SidePanel({ name, answers, done, step }: { name: string; answers: Answe
           <span className="text-tq-violet">❯</span> git log --oneline
         </p>
         <p className="truncate text-tq-muted">
-          author: <bdi className="text-tq-paper">{name}</bdi>
+          author: <bdi className="text-tq-paper">{fullName}</bdi>
           {answers.favoriteColor && (
             <span className="ms-2 inline-block size-2.5 rounded-[2px] align-middle" style={{ background: answers.favoriteColor.hex }} />
           )}
         </p>
-        {questions.map((q, i) => (
-          <p key={q.id} className={`truncate ${i === step ? "text-tq-paper" : done[i] ? "text-tq-muted" : "text-tq-muted/35"}`}>
-            <span className={done[i] ? "text-tq-violet" : ""}>{done[i] ? shortHash(q.id + summary(answers[q.id])) : "·······"}</span>{" "}
-            {q.code}
-            {done[i] && <span className="text-tq-muted/70"> — <bdi>{summary(answers[q.id])}</bdi></span>}
-          </p>
-        ))}
+        {questions.map((q, i) => {
+          const s = summary(answers[q.id], others[q.id]);
+          return (
+            <p key={q.id} className={`truncate ${i === step ? "text-tq-paper" : done[i] ? "text-tq-muted" : "text-tq-muted/35"}`}>
+              <span className={done[i] ? "text-tq-violet" : ""}>{done[i] ? shortHash(q.id + s) : "·······"}</span> {q.code}
+              {done[i] && <span className="text-tq-muted/70"> — <bdi>{s}</bdi></span>}
+            </p>
+          );
+        })}
       </div>
       <p dir="ltr" className="mt-6 text-left font-mono text-[11px] text-tq-muted/60">
         1–9 select · ↵ next · click a block to jump back
@@ -59,7 +79,7 @@ function SidePanel({ name, answers, done, step }: { name: string; answers: Answe
 }
 
 export default function AssessmentScreen({
-  name,
+  fullName,
   step,
   answers,
   others,
@@ -70,7 +90,7 @@ export default function AssessmentScreen({
   onExit,
   onSubmit,
 }: {
-  name: string;
+  fullName: string;
   step: number;
   answers: Answers;
   others: OtherNotes;
@@ -82,8 +102,8 @@ export default function AssessmentScreen({
   onSubmit: () => void;
 }) {
   const q: Question = questions[step];
-  const done = questions.map((qq) => isAnswered(qq, answers));
-  const valid = done[step];
+  const done = questions.map((qq) => isAnswered(qq, answers, others));
+  const valid = canContinue(q, answers, others);
   const isLast = step === questions.length - 1;
   const sending = submitState === "sending";
 
@@ -102,11 +122,12 @@ export default function AssessmentScreen({
   };
   const back = () => (step === 0 ? onExit() : go(step - 1));
 
-  const pickSingle = (label: string, isOther?: boolean) => {
+  const pickSingle = (label: string, asksText?: boolean) => {
     const fresh = answers[q.id] === "";
     onAnswer(q.id, label);
-    // First pick on a single-select question moves on by itself; changing an answer never does.
-    if (fresh && !isOther && !isLast) {
+    // First pick on a single-select question moves on by itself (unless it opens a text field);
+    // changing an answer never does.
+    if (fresh && !asksText && !isLast) {
       window.clearTimeout(autoTimer.current);
       autoTimer.current = window.setTimeout(() => go(step + 1), 420);
     }
@@ -125,7 +146,7 @@ export default function AssessmentScreen({
       if (q.kind === "text" || !q.options[i]) return;
       if (q.kind === "color") return onAnswer(q.id, q.options[i]);
       const opt = q.options[i];
-      if (q.kind === "single") return pickSingle(opt.label, opt.other);
+      if (q.kind === "single") return pickSingle(opt.label, opt.other || !!opt.details);
       document.querySelectorAll<HTMLButtonElement>("[role=checkbox]")[i]?.click();
     },
   };
@@ -142,6 +163,10 @@ export default function AssessmentScreen({
 
   const value = answers[q.id];
   const otherSelected = (q.kind === "single" || q.kind === "multi") && (Array.isArray(value) ? value.includes(OTHER) : value === OTHER);
+  // An option that asks for details ("what exactly?") opens a required field under the choices.
+  const picked = q.kind === "single" ? q.options.find((o) => o.label === value) : undefined;
+  const detailsPrompt = picked?.details;
+  const noteOpen = otherSelected || !!detailsPrompt;
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4 sm:px-8">
@@ -190,7 +215,7 @@ export default function AssessmentScreen({
                         index={i}
                         label={opt.label}
                         selected={value === opt.label}
-                        onSelect={() => pickSingle(opt.label, opt.other)}
+                        onSelect={() => pickSingle(opt.label, opt.other || !!opt.details)}
                       />
                     ))}
                   </div>
@@ -208,7 +233,7 @@ export default function AssessmentScreen({
 
                 {q.kind === "color" && (
                   <ColorClaim
-                    name={name}
+                    name={fullName}
                     colors={q.options}
                     value={answers.favoriteColor}
                     onChange={(c) => onAnswer(q.id, c)}
@@ -230,21 +255,30 @@ export default function AssessmentScreen({
                 )}
 
                 <AnimatePresence>
-                  {otherSelected && (
+                  {noteOpen && (
                     <motion.div
+                      key={detailsPrompt ?? OTHER}
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
                       className="overflow-hidden"
                     >
-                      <p className="mb-2 mt-6 text-[14px] text-tq-muted">وضّح لنا «أخرى» (اختياري)</p>
+                      <p className={`mb-2 mt-6 ${detailsPrompt ? "text-[16px] font-medium text-tq-paper" : "text-[14px] text-tq-muted"}`}>
+                        {detailsPrompt ? (
+                          <Mixed text={detailsPrompt} />
+                        ) : needsNote(picked) ? (
+                          "وضّح لنا «أخرى»"
+                        ) : (
+                          "وضّح لنا «أخرى» (اختياري)"
+                        )}
+                      </p>
                       <TerminalInput
                         compact
                         value={others[q.id] ?? ""}
                         onChange={(v) => onOther(q.id, v)}
                         placeholder="اكتب هنا..."
                         file=""
-                        label="أخرى"
+                        label={detailsPrompt ?? OTHER}
                         onSubmit={next}
                       />
                     </motion.div>
@@ -255,7 +289,7 @@ export default function AssessmentScreen({
           </AnimatePresence>
         </main>
 
-        <SidePanel name={name} answers={answers} done={done} step={step} />
+        <SidePanel fullName={fullName} answers={answers} others={others} done={done} step={step} />
       </div>
 
       <footer className="sticky bottom-0 z-20 -mx-4 bg-gradient-to-t from-tq-bg from-70% to-transparent px-4 pb-[max(env(safe-area-inset-bottom),14px)] pt-6 sm:-mx-8 sm:px-8">

@@ -73,7 +73,7 @@ export default function SuccessScreen({ submission, mode }: { submission: Submis
           <TerminalDetail lines={LOG} delay={1.1} charMs={14} pauseMs={120} className="mt-8" />
 
           <p dir="ltr" className="mt-6 text-right font-mono text-[11px] text-tq-muted/70 lg:text-left">
-            [main {hash}] <bdi className="text-tq-paper">{submission.name}</bdi>
+            [main {hash}] <bdi className="text-tq-paper">{submission.fullName}</bdi>
             {submission.favoriteColor.hex && (
               <span
                 className="mx-1.5 inline-block size-2.5 rounded-[2px] align-middle"

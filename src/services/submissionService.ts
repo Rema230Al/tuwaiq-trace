@@ -1,31 +1,59 @@
-import { OTHER } from "../data/questions";
-import type { Answers, OtherNotes, Submission } from "../types/assessment";
+import { ACADEMIC_YEARS, OTHER, emptyMember, isAnswered, questions, sanitizeAnswers } from "../data/questions";
+import type { Answers, Member, OtherNotes, Submission } from "../types/assessment";
 
 const WEBHOOK_URL = import.meta.env.VITE_SUBMISSION_WEBHOOK_URL?.trim() ?? "";
 const DRAFT_KEY = "tuwaiq-init:draft";
-const NAME_KEY = "tuwaiq-init:name";
+const MEMBER_KEY = "tuwaiq-init:member";
+/** v1 stored only the member's name, as a plain string. */
+const LEGACY_NAME_KEY = "tuwaiq-init:name";
+/** Bump whenever the questions change shape, so old drafts are migrated instead of trusted. */
+const DRAFT_VERSION = 5;
 const TIMEOUT_MS = 15000;
 
 export type SubmitMode = "remote" | "local";
 
 /** Replaces a bare "أخرى" with "أخرى: <what they typed>". */
-function withNote(value: string, note?: string) {
+export function withNote(value: string, note?: string) {
   return value === OTHER && note?.trim() ? `${OTHER}: ${note.trim()}` : value;
 }
 
-export function buildSubmission(name: string, answers: Answers, others: OtherNotes): Submission {
+/** The details typed under the selected option, only if that option asks for them. */
+function detailsFor(id: "learningPreference", answers: Answers, others: OtherNotes) {
+  const q = questions.find((qq) => qq.id === id);
+  const opt = q?.kind === "single" ? q.options.find((o) => o.label === answers[id]) : undefined;
+  return opt?.details ? (others[id] ?? "").trim() : "";
+}
+
+export function buildSubmission(member: Member, answers: Answers, others: OtherNotes): Submission {
   return {
-    name: name.trim(),
+    fullName: member.fullName.trim(),
+    major: member.major.trim(),
+    academicYear: member.academicYear,
     submittedAt: new Date().toISOString(),
-    experience: answers.experience,
+
+    programmingExperience: answers.programmingExperience,
     buildAbility: answers.buildAbility,
-    workedAreas: answers.workedAreas.map((v) => withNote(v, others.workedAreas)),
-    technologies: answers.technologies.trim(),
+    gitGithubUsage: answers.gitGithubUsage,
+    aiUsage: answers.aiUsage,
+    teamworkExperience: answers.teamworkExperience,
+    technologiesUsed: answers.technologiesUsed.map((v) => withNote(v, others.technologiesUsed)),
+
     interests: answers.interests.map((v) => withNote(v, others.interests)),
+    preferredActivities: answers.preferredActivities,
     learningPreference: answers.learningPreference,
-    expectedOutcome: withNote(answers.expectedOutcome, others.expectedOutcome),
+    learningPreferenceDetails: detailsFor("learningPreference", answers, others),
+
+    trackAvoidances: answers.trackAvoidances.map((v) => withNote(v, others.trackAvoidances)),
+    helpingPreference: answers.helpingPreference,
+    preferredTeamRole: answers.preferredTeamRole,
+
+    preferredTimes: answers.preferredTimes,
+    activityFormat: answers.activityFormat,
+    potentialBlocker: withNote(answers.potentialBlocker, others.potentialBlocker),
+
     successDefinition: answers.successDefinition.trim(),
     favoriteColor: answers.favoriteColor ?? { name: "", hex: "" },
+    leadershipNote: answers.leadershipNote.trim(),
   };
 }
 
@@ -69,10 +97,31 @@ export interface Draft {
   step: number;
 }
 
+/**
+ * Loads the saved draft, whatever version wrote it. Answers are re-validated against the
+ * current questions: ones that still fit are kept, the rest start empty. A draft from an
+ * older version resumes at its first unanswered question.
+ */
 export function loadDraft(): Draft | null {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
-    return raw ? (JSON.parse(raw) as Draft) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { version?: unknown; answers?: unknown; others?: unknown; step?: unknown };
+    const answers = sanitizeAnswers(parsed?.answers);
+    const sameVersion = parsed?.version === DRAFT_VERSION;
+    // Notes typed under an older version's options don't belong to the current ones.
+    const others: OtherNotes = {};
+    if (sameVersion && parsed?.others && typeof parsed.others === "object") {
+      for (const [k, v] of Object.entries(parsed.others)) {
+        if (k in answers && typeof v === "string") others[k as keyof Answers] = v;
+      }
+    }
+    const current = sameVersion && typeof parsed.step === "number" && Number.isInteger(parsed.step);
+    const firstOpen = questions.findIndex((q) => !q.optional && !isAnswered(q, answers, others));
+    const step = current
+      ? Math.min(Math.max(0, parsed.step as number), questions.length - 1)
+      : firstOpen === -1 ? questions.length - 1 : firstOpen;
+    return { answers, others, step };
   } catch {
     return null;
   }
@@ -80,7 +129,7 @@ export function loadDraft(): Draft | null {
 
 export function saveDraft(draft: Draft) {
   try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ version: DRAFT_VERSION, ...draft }));
   } catch {
     /* storage unavailable (private mode): answers still live in memory */
   }
@@ -94,20 +143,32 @@ export function clearDraft() {
   }
 }
 
-// ---------- Member name: kept on its own so it survives a refresh on the intro screen ----------
+// ---------- Member info: kept on its own so it survives a refresh on the intro screen ----------
 
-export function loadName(): string {
+export function loadMember(): Member {
   try {
-    return localStorage.getItem(NAME_KEY) ?? "";
+    const raw = localStorage.getItem(MEMBER_KEY);
+    if (raw) {
+      const m = JSON.parse(raw) as Partial<Record<keyof Member, unknown>>;
+      const str = (v: unknown) => (typeof v === "string" ? v : "");
+      return {
+        fullName: str(m?.fullName),
+        major: str(m?.major),
+        academicYear: ACADEMIC_YEARS.includes(str(m?.academicYear)) ? str(m?.academicYear) : "",
+      };
+    }
+    // v1 kept only the name: carry it over as the full name.
+    return { ...emptyMember, fullName: localStorage.getItem(LEGACY_NAME_KEY) ?? "" };
   } catch {
-    return "";
+    return emptyMember;
   }
 }
 
-export function saveName(name: string) {
+export function saveMember(member: Member) {
   try {
-    if (name) localStorage.setItem(NAME_KEY, name);
-    else localStorage.removeItem(NAME_KEY);
+    localStorage.removeItem(LEGACY_NAME_KEY);
+    if (member.fullName || member.major || member.academicYear) localStorage.setItem(MEMBER_KEY, JSON.stringify(member));
+    else localStorage.removeItem(MEMBER_KEY);
   } catch {
     /* ignore */
   }

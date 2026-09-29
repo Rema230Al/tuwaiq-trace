@@ -3,7 +3,8 @@ import { motion } from "framer-motion";
 import TerminalDetail from "../components/TerminalDetail";
 import { PEAK_ROWS, PixelPeak } from "../components/Progress";
 import { Brand, GhostButton, Mixed, PopButton, brandColor, pad } from "../components/ui";
-import { questions } from "../data/questions";
+import { ACADEMIC_YEARS, isMemberValid, isTextValid, questions } from "../data/questions";
+import type { Member } from "../types/assessment";
 
 const BOOT = [
   { text: "tuwaiq.init()", tone: "cmd" as const },
@@ -158,17 +159,79 @@ function StickerBoard() {
   );
 }
 
-export const isNameValid = (name: string) => name.trim().length >= 2;
+const canAutoFocus = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
-/** "Initializing member": the required name, typed into the boot session rather than a form field. */
-function MemberPrompt({ value, onChange, onSubmit }: { value: string; onChange: (v: string) => void; onSubmit: () => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  const ok = isNameValid(value);
+/** One `> key: [ ... ]` line of the boot session, with its Arabic label above it. */
+function PromptField({
+  label,
+  cmd,
+  value,
+  onChange,
+  onEnter,
+  placeholder,
+  autoComplete,
+  inputRef,
+}: {
+  label: string;
+  cmd: string;
+  value: string;
+  onChange: (v: string) => void;
+  onEnter: () => void;
+  placeholder: string;
+  autoComplete: string;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <div className="mt-2">
+      <p className="font-sans text-[16px] font-bold text-tq-paper">
+        <bdi>{label}</bdi>
+      </p>
+      <label className="flex items-center gap-2">
+        <span className="w-[4.25rem] shrink-0 text-tq-muted">
+          <span className="text-tq-violet">&gt;</span> {cmd}:
+        </span>
+        <span className="text-tq-cyan">[</span>
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onEnter();
+          }}
+          dir={value ? "auto" : "rtl"}
+          maxLength={60}
+          autoComplete={autoComplete}
+          enterKeyHint="next"
+          aria-label={label}
+          aria-required="true"
+          placeholder={placeholder}
+          className="h-11 w-0 min-w-0 flex-1 border-b-2 border-dashed border-tq-line bg-transparent px-1 font-sans text-base text-tq-paper caret-tq-cyan outline-none transition-colors placeholder:text-tq-muted/55 focus:border-tq-cyan"
+        />
+        <span className="text-tq-cyan">]</span>
+      </label>
+    </div>
+  );
+}
+
+/** "Initializing member": full name, major and year, typed into the boot session rather than a form. */
+function MemberPrompt({ value, onChange, onSubmit }: { value: Member; onChange: (m: Member) => void; onSubmit: () => void }) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  const majorRef = useRef<HTMLInputElement>(null);
+  const yearRef = useRef<HTMLDivElement>(null);
+  const ok = isMemberValid(value);
+  const set = (patch: Partial<Member>) => onChange({ ...value, ...patch });
 
   useEffect(() => {
     // Desktop only: focusing on phones would throw the keyboard over the intro.
-    if (!value && window.matchMedia("(hover: hover) and (pointer: fine)").matches) ref.current?.focus({ preventScroll: true });
+    if (!value.fullName && canAutoFocus()) nameRef.current?.focus({ preventScroll: true });
   }, []);
+
+  // Enter walks down the fields; on the last complete one it starts.
+  const advance = (from: "name" | "major") => {
+    if (ok) return onSubmit();
+    if (from === "name" && isTextValid(value.fullName)) majorRef.current?.focus();
+    else if (from === "major" && isTextValid(value.major)) yearRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  };
 
   return (
     <motion.div
@@ -181,36 +244,61 @@ function MemberPrompt({ value, onChange, onSubmit }: { value: string; onChange: 
       <p className="text-tq-muted">
         <span className="text-tq-violet">&gt;</span> initializing member...
       </p>
-      <p className="mt-2 font-sans text-[17px] font-bold text-tq-paper">
-        <bdi>وش اسمك؟</bdi>
-      </p>
-      <label className="flex items-center gap-2">
-        <span className="shrink-0 text-tq-muted">
-          <span className="text-tq-violet">&gt;</span> name:
-        </span>
-        <span className="text-tq-cyan">[</span>
-        <input
-          ref={ref}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && ok) onSubmit();
-          }}
-          dir={value ? "auto" : "rtl"}
-          maxLength={40}
-          autoComplete="given-name"
-          enterKeyHint="go"
-          aria-label="وش اسمك؟"
-          aria-required="true"
-          placeholder="اكتب اسمك هنا..."
-          className="h-11 w-0 min-w-0 flex-1 border-b-2 border-dashed border-tq-line bg-transparent px-1 font-sans text-base text-tq-paper caret-tq-cyan outline-none transition-colors placeholder:text-tq-muted/55 focus:border-tq-cyan"
-        />
-        <span className="text-tq-cyan">]</span>
-      </label>
-      <p className="min-h-7" aria-live="polite">
+      <PromptField
+        label="الاسم الكامل"
+        cmd="name"
+        value={value.fullName}
+        onChange={(fullName) => set({ fullName })}
+        onEnter={() => advance("name")}
+        placeholder="اكتب اسمك الكامل..."
+        autoComplete="name"
+        inputRef={nameRef}
+      />
+      <PromptField
+        label="التخصص"
+        cmd="major"
+        value={value.major}
+        onChange={(major) => set({ major })}
+        onEnter={() => advance("major")}
+        placeholder="اكتب تخصصك..."
+        autoComplete="off"
+        inputRef={majorRef}
+      />
+      <div className="mt-2">
+        <p id="year-label" className="font-sans text-[16px] font-bold text-tq-paper">
+          <bdi>السنة الدراسية</bdi>
+        </p>
+        <div className="flex items-start gap-2">
+          <span className="w-[4.25rem] shrink-0 pt-2.5 text-tq-muted">
+            <span className="text-tq-violet">&gt;</span> year:
+          </span>
+          <div
+            ref={yearRef}
+            role="radiogroup"
+            aria-labelledby="year-label"
+            aria-required="true"
+            dir="rtl"
+            className="flex min-w-0 flex-1 flex-wrap gap-x-2 gap-y-3 pb-1 pt-1"
+          >
+            {ACADEMIC_YEARS.map((y) => (
+              <button
+                key={y}
+                type="button"
+                role="radio"
+                aria-checked={value.academicYear === y}
+                onClick={() => set({ academicYear: y })}
+                className="key min-h-10 px-3 font-sans text-[14px] font-medium"
+              >
+                {y}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <p className="mt-2 min-h-7" aria-live="polite">
         {ok && (
           <motion.span initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} className="inline-block text-tq-cyan">
-            ✓ <span className="text-tq-muted">member:</span> <bdi className="text-tq-paper">{value.trim()}</bdi>
+            ✓ <span className="text-tq-muted">member:</span> <bdi className="text-tq-paper">{value.fullName.trim()}</bdi>
             <span className="text-tq-muted"> · session initialized</span>
           </motion.span>
         )}
@@ -220,19 +308,19 @@ function MemberPrompt({ value, onChange, onSubmit }: { value: string; onChange: 
 }
 
 export default function IntroScreen({
-  name,
-  onName,
+  member,
+  onMember,
   resumeStep,
   onStart,
 }: {
-  name: string;
-  onName: (name: string) => void;
+  member: Member;
+  onMember: (member: Member) => void;
   /** Question index of a saved draft, or null. */
   resumeStep: number | null;
   onStart: (resume: boolean) => void;
 }) {
   const [skip, setSkip] = useState(false);
-  const ready = isNameValid(name);
+  const ready = isMemberValid(member);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -281,7 +369,7 @@ export default function IntroScreen({
           </motion.div>
 
           <TerminalDetail lines={BOOT} instant={skip} delay={0.5} className="mt-7" />
-          <MemberPrompt value={name} onChange={onName} onSubmit={() => onStart(resumeStep !== null)} />
+          <MemberPrompt value={member} onChange={onMember} onSubmit={() => onStart(resumeStep !== null)} />
         </div>
 
         <div className="hidden lg:block">
@@ -307,7 +395,7 @@ export default function IntroScreen({
         </PopButton>
         {resumeStep !== null && <GhostButton disabled={!ready} onClick={() => onStart(false)}>ابدأ من جديد</GhostButton>}
         <p className="text-center font-mono text-[11px] text-tq-muted sm:ms-auto sm:text-start">
-          <bdi dir="ltr">{pad(questions.length)} questions · ~3 min</bdi>
+          <bdi dir="ltr">{pad(questions.length)} questions · ~5 min</bdi>
         </p>
       </motion.footer>
     </div>

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && npx wrangler pages deploy dist --project-name tuwaiq-init --branch main"
   },
   "dependencies": {
     "framer-motion": "^13.4.4",

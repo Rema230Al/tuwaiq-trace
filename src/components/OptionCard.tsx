@@ -1,14 +1,17 @@
 import { motion } from "framer-motion";
 import { Mixed, pad } from "./ui";
 
-/** Large single-select option: an editor-line plate with a line number and a pixel check. */
+/**
+ * Large single-select option: an editor-line plate with a pixel check.
+ * With an `index` it shows a line number; without one just a neutral pixel bullet.
+ */
 export default function OptionCard({
   index,
   label,
   selected,
   onSelect,
 }: {
-  index: number;
+  index?: number;
   label: string;
   selected: boolean;
   onSelect: () => void;
@@ -17,12 +20,18 @@ export default function OptionCard({
     <button type="button" role="radio" aria-checked={selected} onClick={onSelect} className="pop group w-full">
       <span className="pop__back" />
       <span className="pop__front flex min-h-[60px] items-center gap-3 px-4 py-3 sm:gap-4 sm:px-5">
-        <span
-          dir="ltr"
-          className="w-6 shrink-0 font-mono text-xs font-medium text-tq-violet/70 transition-colors group-aria-checked:text-tq-cyan"
-        >
-          {pad(index + 1)}
-        </span>
+        {index !== undefined ? (
+          <span
+            dir="ltr"
+            className="w-6 shrink-0 font-mono text-xs font-medium text-tq-violet/70 transition-colors group-aria-checked:text-tq-cyan"
+          >
+            {pad(index + 1)}
+          </span>
+        ) : (
+          <span aria-hidden="true" className="grid w-3 shrink-0 place-items-center sm:w-4">
+            <span className="size-2 rounded-[2px] bg-tq-violet/70 transition-colors group-aria-checked:bg-tq-cyan" />
+          </span>
+        )}
         <span className="flex-1 text-[15.5px] font-medium leading-relaxed sm:text-[17px]">
           <Mixed text={label} />
         </span>
